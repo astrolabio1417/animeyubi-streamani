@@ -61,9 +61,7 @@ class Streamani:
         return re.sub("streaming.php", "loadserver.php", text)
     
     def get_download_server(self, soup):
-        iframe_url = self._iframe_src(soup)
-        _id = re.findall('id=(.*?)&', iframe_url)
-        return (f"{self.host}download?id={_id[0]}")
+        return (f"{self.host}download?id={self._get_iframe_id(soup)}")
 
     # SHIT SERVER. FROM DOWNLOAD SERVER. NO MORE GOOGLE SERVER.
     def get_downloads(self, soup):
