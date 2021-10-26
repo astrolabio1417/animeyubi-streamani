@@ -1,0 +1,133 @@
+import requests, re
+from bs4 import BeautifulSoup
+
+class Streamani:
+    def __init__(self, host = "https://streamani.net/"):
+        self.host = host
+    
+    def _requests(self, url):
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.61 Safari/537.36"}, timeout=(5,15))
+        return res
+
+    def _requests_to_soup(self, url):
+        res = self._requests(url)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        if res.status_code != 200:
+            return None
+
+        if soup.text.strip("\n") == "404":
+            raise ValueError("Request got 404 or The page is not available.")
+   
+        return soup
+
+    def _get_soup_pagination(self, soup):
+        prev = soup.find('li', class_='previous')
+        next = soup.find('li', class_='next')
+
+        return {
+            'prev': prev.find('a').get('href').strip('?page=') if prev else None,
+            'next': next.find('a').get('href').strip('?page=') if next else None
+        }
+
+    def _get_soup_list(self, soup):
+        data = []
+        soup = soup.find("ul", class_=["listing items", "listing items lists"])
+        containers = soup.find_all('li', class_='video-block')
+
+        if not containers or len(containers) == 0:
+            return None
+
+        for anime in containers:
+            source_url = anime.find('a').get('href').replace('/videos/', '')
+                
+            data.append({
+                "title": re.search("(.+)(\sEpisode\s[0-9])", anime.find('div', class_='name').text.strip()).group(1),
+                "episode": source_url.split('-episode-')[-1] if "episode" in source_url else "-",
+                "image": anime.find('img').get('src'),
+                "release": anime.find('span', class_='date').text.strip(),
+                "slug": re.search("(.*)(-episode-)", source_url).group(1)
+            })
+
+        return data
+
+    def _iframe_src(self, soup):
+        return soup.find('iframe').get('src')
+        
+    def _get_iframe_id(self, soup):
+        return re.search("(id=)([a-zA-Z0-9]*)", self._iframe_src(soup)).group(2)
+
+    def _iframe_src_to_loadserver(self, text):
+        return re.sub("streaming.php", "loadserver.php", text)
+    
+    def get_download_server(self, soup):
+        iframe_url = self._iframe_src(soup)
+        _id = re.findall('id=(.*?)&', iframe_url)
+        return (f"{self.host}download?id={_id[0]}")
+
+    # SHIT SERVER. FROM DOWNLOAD SERVER. NO MORE GOOGLE SERVER.
+    def get_downloads(self, soup):
+        frame_id = self._get_iframe_id(soup)
+        download_soup = self._requests_to_soup(f"{self.host}download?id={frame_id}")
+        containers = download_soup.find_all('div', class_='mirror_link')
+        container = containers[0] # DIRECT DOWNLOAD container
+        results = {}
+
+        for anime in container.find_all('div', class_='dowload'):
+            link = anime.find('a')
+            results["{}".format(re.sub("Download", "" ,link.text).strip()[1:-7])] = link.get('href')
+
+        return results
+
+    def get_m3u8_url(self, soup):
+        frame_res = self._requests_to_soup(f"https:{self._iframe_src(soup)}")
+        token_server = frame_res.select("li[data-provider='serverwithtoken']")[0]['data-video']
+        token_server_res = self._requests(token_server).text
+        return [{f'm3u8-{index}': file} for index, file in enumerate(re.findall("file: \'(.+?)\'", token_server_res))]
+
+    def index_page(self, page = 1):
+        soup = self._requests_to_soup(self.host + f"?page={page}")
+        return {
+            "results": self._get_soup_list(soup),
+            "pagination": self._get_soup_pagination(soup)
+        }
+
+    def search_page(self, query: str, page = 1):
+        soup = self._requests_to_soup(f"{self.host}search.html?keyword={query}&page={page}")
+        return {
+            "results": self._get_soup_list(soup),
+            "pagination": self._get_soup_pagination(soup)
+        }
+
+    def episode_info(self, source_title, episode, sort=False):
+        soup = self._requests_to_soup(f"{self.host}videos/{source_title}-episode-{episode}" if episode != "-" else f"{self.host}videos/{source_title}")
+        not_sorted_list = self._get_soup_list(soup)
+        sorted_episode_list = not_sorted_list[::-1]
+        current_episode, next, prev = [None] * 3
+        
+        for index, item in enumerate(sorted_episode_list):
+            if item['episode'] == str(episode):
+                prev = sorted_episode_list[index - 1] if index != 0 else None
+                next = sorted_episode_list[index + 1] if index != (len(not_sorted_list) - 1) else None
+                current_episode = item
+                break
+
+        return {
+            "results": {
+                "episode_list": sorted_episode_list if sort else not_sorted_list,
+                "current": current_episode,
+                "download_server": self.get_download_server(soup),
+                "downloads": self.get_downloads(soup),
+                "m3u8": self.get_m3u8_url(soup)
+            },
+            "pagination": {
+                "next": next,
+                "prev": prev,
+            }
+        }
+
+if __name__ == '__main__':
+    stream = Streamani()
+    print(stream.index_page())
+    print(stream.search_page("sword art online"))
+    print(stream.episode_info("i-upset-millions-of-cultivators", "22"))
