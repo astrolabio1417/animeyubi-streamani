@@ -1,2 +1,2 @@
 # animeyubi-streamani
-From my shtty website https://animeyubiv7.herokuapp.com/
+From my shtty website https://animeyubi.com/
